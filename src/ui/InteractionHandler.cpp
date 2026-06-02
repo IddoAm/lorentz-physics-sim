@@ -220,5 +220,8 @@ void InteractionHandler::spawnMagneticField(sf::Vector2f worldPos) {
 }
 
 sf::Vector2f InteractionHandler::toWorldPos(sf::RenderWindow& window) {
-    return window.mapPixelToCoords(sf::Mouse::getPosition(window));
+    sf::Vector2f pos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
+	pos.y = static_cast<float>(window.getSize().y) - pos.y; // flip y
+
+    return pos;
 }
