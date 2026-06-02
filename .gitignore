@@ -1,0 +1,15 @@
+# Build
+build/
+out/
+*.exe
+
+# VS / VS Code
+.vs/
+*.user
+*.suo
+CMakeSettings.json
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
