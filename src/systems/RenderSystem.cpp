@@ -2,6 +2,7 @@
 #include "components/Particle.hpp"
 #include "components/ElectricField.hpp"
 #include "components/MagneticField.hpp"
+#include "components/Tags.hpp"
 
 #include <array>
 #include <cmath>
@@ -15,6 +16,50 @@ namespace {
     constexpr float kSymbolRadius = 8.f;   // max out-of-plane ring radius
     constexpr float kSymbolMin = 3.f;
     constexpr float kZeroEps = 1e-6f;
+
+    constexpr float kParticleBaseRadius = 5.f;
+    constexpr float kParticleRadiusScaleFactor = 3.5f;
+
+    constexpr float kGradientChargeScale = 0.5f;
+
+    uint8_t toByte(float v) {
+        return static_cast<uint8_t>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f);
+    }
+
+    // Maps charge to a color gradient:
+    //   negative -> red, zero -> neutral (light grey), positive -> blue.
+    sf::Color chargeToColor(float charge) {
+        // Squash into [-1, 1] so any magnitude works.
+        float t = std::tanh(charge * kGradientChargeScale); // -1..1
+
+        // Endpoint colors.
+        const sf::Vector3f neg(1.0f, 0.25f, 0.25f); // red
+        const sf::Vector3f neu(0.85f, 0.85f, 0.85f); // neutral
+        const sf::Vector3f pos(0.25f, 0.45f, 1.0f); // blue
+
+        sf::Vector3f c;
+        if (t < 0.f) {
+            float k = -t; // 0..1 toward red
+            c = { neu.x + (neg.x - neu.x) * k,
+                  neu.y + (neg.y - neu.y) * k,
+                  neu.z + (neg.z - neu.z) * k };
+        }
+        else {
+            float k = t;  // 0..1 toward blue
+            c = { neu.x + (pos.x - neu.x) * k,
+                  neu.y + (pos.y - neu.y) * k,
+                  neu.z + (pos.z - neu.z) * k };
+        }
+        return sf::Color(toByte(c.x), toByte(c.y), toByte(c.z));
+    }
+
+    sf::Color brighten(sf::Color c, float amount) {
+        return sf::Color(
+            toByte(c.r / 255.f + amount),
+            toByte(c.g / 255.f + amount),
+            toByte(c.b / 255.f + amount),
+            c.a);
+    }
 }
 
 RenderSystem::RenderSystem(entt::registry& registry, sf::RenderWindow& window)
@@ -28,38 +73,135 @@ void RenderSystem::draw() {
     drawParticles();
 }
 
+float calculate_particle_radius(float mass) {
+    if (mass < 1.0f) mass = 1.0f;
+    return kParticleBaseRadius + kParticleRadiusScaleFactor * std::log10(mass);
+}
+
 void RenderSystem::drawParticles() {
     auto view = m_registry.view<Particle>();
 
     const float H = static_cast<float>(m_window.getSize().y);
 
-    sf::CircleShape circle(6.f);
-    circle.setOrigin({ 6.f, 6.f });
+    // Instantiate a reusable circle shape. 
+    // We don't give it a size yet since it changes per particle.
+    sf::CircleShape circle;
 
     for (auto&& [entity, particle] : view.each()) {
-        // Flip y: world is y-up, screen is y-down
-        circle.setPosition({ particle.position.x, H - particle.position.y });
-        circle.setFillColor(particle.charge > 0.f ? sf::Color::Red : sf::Color::Cyan);
+        const sf::Vector2f pos{ particle.position.x, H - particle.position.y };
+        const auto hl = highlightOf(entity);
+
+        // 1. Calculate the dynamic radius based on this particle's mass
+        float current_radius = calculate_particle_radius(particle.mass);
+
+        // 2. Update the circle shape properties for this specific particle
+        circle.setRadius(current_radius);
+        circle.setOrigin({ current_radius, current_radius }); // Centers the origin correctly
+
+        sf::Color fill = chargeToColor(particle.charge);
+
+        if (hl.hovered && !hl.selected) {
+            fill = brighten(fill, 0.20f);
+        }
+
+        circle.setPosition(pos);
+        circle.setFillColor(fill);
+
+        if (hl.hovered && !hl.selected) {
+            circle.setOutlineThickness(1.5f);
+            circle.setOutlineColor(sf::Color(255, 255, 255, 180));
+        }
+        else {
+            circle.setOutlineThickness(0.f);
+            circle.setOutlineColor(sf::Color::Transparent);
+        }
+
         m_window.draw(circle);
+
+        if (hl.selected) {
+            // 3. Pass the dynamic radius here too so the selection ring matches!
+            drawSelectionOutline(pos, current_radius);
+        }
+    }
+}
+
+void RenderSystem::drawSelectionOutline(sf::Vector2f center, float baseRadius) {
+    // Outer bright ring.
+    const float outerR = baseRadius + 5.f;
+    sf::CircleShape ring(outerR);
+    ring.setOrigin({ outerR, outerR });
+    ring.setPosition(center);
+    ring.setFillColor(sf::Color::Transparent);
+    ring.setOutlineColor(sf::Color(255, 215, 0, 230)); // gold highlight
+    ring.setOutlineThickness(2.5f);
+    m_window.draw(ring);
+
+    // Soft halo for extra emphasis.
+    const float haloR = baseRadius + 9.f;
+    sf::CircleShape halo(haloR);
+    halo.setOrigin({ haloR, haloR });
+    halo.setPosition(center);
+    halo.setFillColor(sf::Color::Transparent);
+    halo.setOutlineColor(sf::Color(255, 215, 0, 60));
+    halo.setOutlineThickness(2.f);
+    m_window.draw(halo);
+}
+
+void RenderSystem::drawSelectionOutline(const Rect& region) {
+    const float H = static_cast<float>(m_window.getSize().y);
+    const float pad = 3.f;
+
+    // Bright frame.
+    sf::RectangleShape frame({ region.w + pad * 2.f, region.h + pad * 2.f });
+    frame.setPosition({ region.x - pad, H - (region.y + region.h) - pad });
+    frame.setFillColor(sf::Color::Transparent);
+    frame.setOutlineColor(sf::Color(255, 215, 0, 230)); // gold highlight
+    frame.setOutlineThickness(2.5f);
+    m_window.draw(frame);
+
+    // Soft halo.
+    const float halo = pad + 4.f;
+    sf::RectangleShape glow({ region.w + halo * 2.f, region.h + halo * 2.f });
+    glow.setPosition({ region.x - halo, H - (region.y + region.h) - halo });
+    glow.setFillColor(sf::Color::Transparent);
+    glow.setOutlineColor(sf::Color(255, 215, 0, 60));
+    glow.setOutlineThickness(2.f);
+    m_window.draw(glow);
+}
+
+void RenderSystem::drawField(entt::entity entity, const Rect& region, const glm::vec3& vec,
+    sf::Color fill, sf::Color outline, sf::Color arrow) {
+    const auto hl = highlightOf(entity);
+
+    // Hovered: brighten the region so it reads as "live" without changing layout.
+    if (hl.hovered && !hl.selected) {
+        fill = brighten(fill, 0.15f);
+        outline = brighten(outline, 0.30f);
+    }
+
+    drawFieldRegion(region, fill, outline);
+    drawFieldDirection(region, vec, arrow);
+
+    if (hl.selected) {
+        drawSelectionOutline(region);
     }
 }
 
 void RenderSystem::drawFields() {
     for (auto&& [entity, field] : m_registry.view<ElectricField>().each()) {
-        drawFieldRegion(field.region,
+        drawField(entity, field.region, field.E,
             sf::Color(255, 255, 0, 40),
-            sf::Color(255, 255, 0, 180));
-        drawFieldDirection(field.region, field.E, sf::Color(255, 255, 0, 220));
+            sf::Color(255, 255, 0, 180),
+            sf::Color(255, 255, 0, 220));
     }
 
     for (auto&& [entity, field] : m_registry.view<MagneticField>().each()) {
-        drawFieldRegion(field.region,
+        drawField(entity, field.region, field.B,
             sf::Color(0, 100, 255, 40),
-            sf::Color(0, 100, 255, 180));
-        drawFieldDirection(field.region, field.B, sf::Color(120, 180, 255, 230));
+            sf::Color(0, 100, 255, 180),
+            sf::Color(120, 180, 255, 230));
     }
 }
-
 void RenderSystem::drawFieldRegion(const Rect& region, sf::Color fill, sf::Color outline) {
     const float H = static_cast<float>(m_window.getSize().y);
 
@@ -154,4 +296,9 @@ void RenderSystem::drawLine(sf::Vector2f a, sf::Vector2f b, sf::Color color) {
         sf::Vertex{ b, color }
     };
     m_window.draw(line.data(), line.size(), sf::PrimitiveType::Lines);
+}
+
+Highlight RenderSystem::highlightOf(entt::entity e) const {
+    return { m_registry.all_of<Hovered>(e),
+             m_registry.all_of<Selected>(e) };
 }

@@ -49,6 +49,8 @@ void Application::update(float dt) {
 
     if (m_mode == SimulationMode::Running)
         m_physics.update(dt);
+    else if(m_mode == SimulationMode::Editing)
+        m_interaction.update(m_window);
 
     m_toolbar.draw(m_mode);
     m_inspector.draw(m_registry);
@@ -73,6 +75,7 @@ void Application::startSimulation() {
     for (auto&& [e, f] : m_registry.view<MagneticField>().each())
         m_snapshot.bFields.push_back({ e, f });
 
+	m_interaction.onModeChange(SimulationMode::Running);
     m_mode = SimulationMode::Running;
 }
 
@@ -88,5 +91,6 @@ void Application::stopSimulation() {
     for (auto& entry : m_snapshot.bFields)
         m_registry.emplace<MagneticField>(m_registry.create(), entry.f);
 
+    m_interaction.onModeChange(SimulationMode::Editing);
     m_mode = SimulationMode::Editing;
 }

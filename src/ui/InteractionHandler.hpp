@@ -14,7 +14,10 @@ class InteractionHandler {
 public:
     InteractionHandler(entt::registry& registry, Inspector& inspector);
 
+
+	void update(sf::RenderWindow& window);
     void handleEvent(const sf::Event& event, sf::RenderWindow& window, SimulationMode mode);
+	void onModeChange(SimulationMode newMode);
 
     enum class Handle {
         None,
@@ -31,6 +34,7 @@ public:
     static std::array<sf::Vector2f, 8> handlePositions(const Rect& r);
 
 private:
+    void selectEntity(entt::entity e);
     void trySelect(sf::Vector2f worldPos);
 
     void spawnParticle(sf::Vector2f worldPos);

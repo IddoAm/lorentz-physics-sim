@@ -4,6 +4,7 @@
 #include <imgui.h>
 #include <cmath>
 #include <algorithm>
+#include "components/tags.hpp"
 
 namespace {
     constexpr float kParticlePickRadiusSq = 36.f; // 6px radius squared
@@ -79,6 +80,39 @@ std::array<sf::Vector2f, 8> InteractionHandler::handlePositions(const Rect& r) {
     } };
 }
 
+void InteractionHandler::update(sf::RenderWindow& window) {
+    sf::Vector2f mousePos = toWorldPos(window);
+
+    // clear all hovers
+    auto hovered = m_registry.view<Hovered>();
+    m_registry.erase<Hovered>(hovered.begin(), hovered.end());
+
+    // hit test particles
+    for (auto&& [entity, particle] : m_registry.view<Particle>().each()) {
+        float dx = particle.position.x - mousePos.x;
+        float dy = particle.position.y - mousePos.y;
+        if (dx * dx + dy * dy < 36.f) {
+            m_registry.emplace<Hovered>(entity);
+            return;
+        }
+    }
+
+    // hit test fields
+    for (auto&& [entity, field] : m_registry.view<ElectricField>().each()) {
+        if (field.region.contains(mousePos.x, mousePos.y)) {
+            m_registry.emplace<Hovered>(entity);
+            return;
+        }
+    }
+
+    for (auto&& [entity, field] : m_registry.view<MagneticField>().each()) {
+        if (field.region.contains(mousePos.x, mousePos.y)) {
+            m_registry.emplace<Hovered>(entity);
+            return;
+        }
+    }
+}
+
 void InteractionHandler::handleEvent(const sf::Event& event, sf::RenderWindow& window, SimulationMode mode) {
     if (ImGui::GetIO().WantCaptureMouse) return;
 
@@ -86,8 +120,24 @@ void InteractionHandler::handleEvent(const sf::Event& event, sf::RenderWindow& w
         sf::Vector2f worldPos = toWorldPos(window);
 
         if (mode == SimulationMode::Editing) {
-            trySelect(worldPos);
-            beginDrag(worldPos);
+            bool startedResize = false;
+            for (auto [entity] : m_registry.view<Selected>().each()) {
+                if (Rect* region = getRegion(entity)) {
+                    Handle h = pickHandle(*region, worldPos, kHandleSize);
+                    if (h != Handle::None) {
+                        m_dragging = entity;
+                        m_isDragging = true;
+                        m_resizeHandle = h;
+                        startedResize = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!startedResize) {
+                trySelect(worldPos);
+                beginDrag(worldPos);
+            }
         }
     }
 
@@ -101,22 +151,35 @@ void InteractionHandler::handleEvent(const sf::Event& event, sf::RenderWindow& w
     }
 }
 
+void InteractionHandler::onModeChange(SimulationMode newMode) {
+    if (newMode == SimulationMode::Running) {
+        m_registry.erase<Selected>(m_registry.view<Selected>().begin(), m_registry.view<Selected>().end());
+        m_inspector.deselect();
+    }
+}
+
+void InteractionHandler::selectEntity(entt::entity e) {
+    m_registry.emplace_or_replace<Selected>(e);
+    m_inspector.select(e);
+}
+
 void InteractionHandler::trySelect(sf::Vector2f worldPos) {
+    m_registry.erase<Selected>(m_registry.view<Selected>().begin(), m_registry.view<Selected>().end());
     for (auto&& [entity, particle] : m_registry.view<Particle>().each()) {
         if (hitParticle(particle, worldPos)) {
-            m_inspector.select(entity);
+            selectEntity(entity);
             return;
         }
     }
     for (auto&& [entity, field] : m_registry.view<ElectricField>().each()) {
         if (field.region.contains(worldPos.x, worldPos.y)) {
-            m_inspector.select(entity);
+            selectEntity(entity);
             return;
         }
     }
     for (auto&& [entity, field] : m_registry.view<MagneticField>().each()) {
         if (field.region.contains(worldPos.x, worldPos.y)) {
-            m_inspector.select(entity);
+            selectEntity(entity);
             return;
         }
     }
@@ -143,15 +206,7 @@ void InteractionHandler::beginDrag(sf::Vector2f worldPos) {
         }
     }
 
-    // fields: edge/corner = resize, interior = move
     auto tryField = [&](entt::entity entity, Rect& region) -> bool {
-        Handle h = pickHandle(region, worldPos, kHandleSize);
-        if (h != Handle::None) {
-            m_dragging = entity;
-            m_isDragging = true;
-            m_resizeHandle = h;
-            return true;
-        }
         if (region.contains(worldPos.x, worldPos.y)) {
             m_dragging = entity;
             m_isDragging = true;
